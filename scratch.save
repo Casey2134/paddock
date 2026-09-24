@@ -1,0 +1,1 @@
+openssl dgst -sha256 -hmac '1bef4276cb9ecb68b1255f69bbeac6b9173ce49c47a1f7d0sca442b46675ca2a8' tests/fixtures/b0f01e10-b7c6-11f1-8015-5bb7cda013f7-workflow_job.json
