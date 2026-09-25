@@ -1,57 +1,90 @@
-use axum::{
-    Router,
-    routing::post,
-};
-use axum::extract::State;
+use std::time::Duration;
+
 use axum::body::Bytes;
-use axum::http::{
-    HeaderMap,
-    StatusCode,
-};
+use axum::extract::State;
+use axum::http::{HeaderMap, HeaderValue, StatusCode};
+use axum::{Router, routing::post};
+use reqwest::header::ACCEPT;
+mod events;
+use events::WorkflowJobEvent;
+mod github;
 mod webhook;
+use crate::events::label_check;
 use webhook::verify_webhook;
+
+#[derive(Clone)]
+struct AppState {
+    github_token: String,
+    secret: String,
+    client: reqwest::Client,
+}
+
 #[tokio::main]
-async fn main() {
+async fn main() -> anyhow::Result<()> {
     dotenvy::dotenv().ok();
-    let secret = std::env::var("WEBHOOK_SECRET").expect("set WEBHOOK_SECRET");
-    let app= Router::new().route("/webhook", post(handle_webhook)).with_state(secret);
-
-    let listner = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        ACCEPT,
+        HeaderValue::from_static("application/vnd.github+json"),
+    );
+    headers.insert(
+        "x-github-api-version",
+        HeaderValue::from_static("2022-11-28"),
+    );
+    let app_state = AppState {
+        github_token: std::env::var("GITHUB_TOKEN").expect("set GITHUB_TOKEN"),
+        secret: std::env::var("WEBHOOK_SECRET").expect("set WEBHOOK_SECRET"),
+        client: reqwest::Client::builder()
+            .user_agent("paddock/0.1.0")
+            .default_headers(headers)
+            .timeout(Duration::from_secs(30))
+            .build()?,
+    };
+    let app = Router::new()
+        .route("/webhook", post(handle_webhook))
+        .with_state(app_state);
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await?;
     println!("listening on port 3000");
-    axum::serve(listner, app).await.unwrap();
-} 
+    axum::serve(listener, app).await?;
+    Ok(())
+}
 
-async fn handle_webhook(State(secret): State<String>, headers: HeaderMap, body: Bytes) -> StatusCode {
-    let text = String::from_utf8_lossy(&body);
-    let event = headers.get("X-Github-Event");
-    let uid = headers.get("x-github-delivery");
-    let Some(s_header) = headers.get("x-hub-signature-256") else{
-        return StatusCode::UNAUTHORIZED;
-        };
-    let Ok(s_header_str) = s_header.to_str() else{
+async fn handle_webhook(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> StatusCode {
+    let Some(event) = headers.get("X-Github-Event") else {
+        return StatusCode::BAD_REQUEST;
+    };
+    let Ok(event_str) = event.to_str() else {
+        return StatusCode::BAD_REQUEST;
+    };
+    let Some(s_header) = headers.get("x-hub-signature-256") else {
         return StatusCode::UNAUTHORIZED;
     };
-    if !verify_webhook(secret.as_bytes(), &body, s_header_str){
+    let Ok(s_header_str) = s_header.to_str() else {
+        return StatusCode::UNAUTHORIZED;
+    };
+
+    if !verify_webhook(state.secret.as_bytes(), &body, s_header_str) {
         return StatusCode::UNAUTHORIZED;
     }
-    println!{"{}", text};
-    if let Some(value) = uid && let Some(e_value) = event{
-        if let Ok(uid_str) = value.to_str() && let Ok(event_str) = e_value.to_str(){
-            let filename = format!("tests/fixtures/{}-{}.json", uid_str, event_str);
-        
-            if let Err(e) = std::fs::write(filename, &body){
-                println!("{}", e);
-            }
-        }
+
+    if event_str != "workflow_job" {
+        return StatusCode::OK;
     }
-    if let Some(value) = event {
-        if let Ok(event_name) = value.to_str() {
-           println!("github event: {}", event_name);
-            return StatusCode::OK;
-        }else {
-            return StatusCode::BAD_REQUEST;
-        }
-    }else{
+    //extract json from body
+    let Ok(w_event) = serde_json::from_slice::<WorkflowJobEvent>(&body) else {
         return StatusCode::BAD_REQUEST;
+    };
+
+    if w_event.action != "queued" {
+        return StatusCode::OK;
     }
+
+    if label_check(&w_event) {
+        println!("Starting workflow job {:?}", w_event.workflow_job.id);
+    }
+    StatusCode::OK
 }
