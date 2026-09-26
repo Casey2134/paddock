@@ -8,6 +8,7 @@ use reqwest::header::ACCEPT;
 mod events;
 use events::WorkflowJobEvent;
 mod github;
+mod runner;
 mod webhook;
 use crate::events::label_check;
 use webhook::verify_webhook;
@@ -17,6 +18,8 @@ struct AppState {
     github_token: String,
     secret: String,
     client: reqwest::Client,
+    jobs_dir: String,
+    runner_template_dir: String,
 }
 
 #[tokio::main]
@@ -39,6 +42,8 @@ async fn main() -> anyhow::Result<()> {
             .default_headers(headers)
             .timeout(Duration::from_secs(30))
             .build()?,
+        jobs_dir: std::env::var("JOBS_DIR").expect("set JOBS_DIR"),
+        runner_template_dir: std::env::var("RUNNER_TEMPLATE_DIR").expect("set RUNNER_TEMPLATE_DIR"),
     };
     let app = Router::new()
         .route("/webhook", post(handle_webhook))
@@ -80,6 +85,19 @@ async fn handle_webhook(
     };
 
     if w_event.action != "queued" {
+        let status = runner::run_job(
+            &state.client,
+            &state.github_token,
+            &w_event.repository.owner.login,
+            &w_event.repository.name,
+            &state.jobs_dir,
+            w_event.workflow_job.id,
+            &state.runner_template_dir,
+        )
+        .await;
+        if let Err(e) = status {
+            println!("{:?}", e);
+        }
         return StatusCode::OK;
     }
 
