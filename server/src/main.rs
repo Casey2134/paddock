@@ -85,6 +85,11 @@ async fn handle_webhook(
     };
 
     if w_event.action != "queued" {
+        return StatusCode::OK;
+    }
+
+    if label_check(&w_event) {
+        println!("Starting workflow job {:?}", w_event.workflow_job.id);
         let status = runner::run_job(
             &state.client,
             &state.github_token,
@@ -98,11 +103,6 @@ async fn handle_webhook(
         if let Err(e) = status {
             println!("{:?}", e);
         }
-        return StatusCode::OK;
-    }
-
-    if label_check(&w_event) {
-        println!("Starting workflow job {:?}", w_event.workflow_job.id);
     }
     StatusCode::OK
 }
