@@ -31,6 +31,7 @@ pub async fn get_jit_config(
         "https://api.github.com/repos/{}/{}/actions/runners/generate-jitconfig",
         owner, repo
     );
+    println!("{}", req_url);
     let body = JitRequestBody {
         name: String::from(runner),
         runner_group_id: 1,
