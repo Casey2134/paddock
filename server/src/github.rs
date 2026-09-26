@@ -28,7 +28,7 @@ pub async fn get_jit_config(
     runner: &str,
 ) -> anyhow::Result<JitConfig> {
     let req_url = format!(
-        "/repos/{}/{}/actions/runners/generate-jitconfig",
+        "https://api.github.com/repos/{}/{}/actions/runners/generate-jitconfig",
         owner, repo
     );
     let body = JitRequestBody {
