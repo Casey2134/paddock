@@ -59,7 +59,7 @@ async fn handle_webhook(
     headers: HeaderMap,
     body: Bytes,
 ) -> StatusCode {
-    let Some(event) = headers.get("X-Github-Event") else {
+    let Some(event) = headers.get("x-github-event") else {
         return StatusCode::BAD_REQUEST;
     };
     let Ok(event_str) = event.to_str() else {
@@ -79,7 +79,8 @@ async fn handle_webhook(
     if event_str != "workflow_job" {
         return StatusCode::OK;
     }
-    //extract json from body
+
+    // extract json from body
     let Ok(w_event) = serde_json::from_slice::<WorkflowJobEvent>(&body) else {
         return StatusCode::BAD_REQUEST;
     };
@@ -89,20 +90,25 @@ async fn handle_webhook(
     }
 
     if label_check(&w_event) {
-        println!("Starting workflow job {:?}", w_event.workflow_job.id);
-        let status = runner::run_job(
-            &state.client,
-            &state.github_token,
-            &w_event.repository.owner.login,
-            &w_event.repository.name,
-            &state.jobs_dir,
-            w_event.workflow_job.id,
-            &state.runner_template_dir,
-        )
-        .await;
-        if let Err(e) = status {
-            println!("{:?}", e);
-        }
+        println!("Starting workflow job {}", w_event.workflow_job.id);
+        tokio::spawn(async move {
+            if let Err(e) = runner::run_job(
+                &state.client,
+                &state.github_token,
+                &w_event.repository.owner.login,
+                &w_event.repository.name,
+                &state.jobs_dir,
+                w_event.workflow_job.id,
+                &state.runner_template_dir,
+            )
+            .await
+            {
+                println!("{:?}", e);
+            } else {
+                println!("job {} completed", w_event.workflow_job.id);
+            }
+        });
     }
+
     StatusCode::OK
 }
